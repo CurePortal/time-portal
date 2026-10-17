@@ -446,6 +446,11 @@ fn write_manifest(target: &str, host: Option<String>) -> Result<()> {
 }
 
 fn unlock(device: &str, name: &str, passphrase_file: Option<String>) -> Result<()> {
+    // Already open (e.g. the hotplug/crypttab hook beat us): nothing to do.
+    let mapper = format!("/dev/mapper/{name}");
+    if Path::new(&mapper).exists() {
+        return Ok(());
+    }
     let pass = match passphrase_file {
         Some(p) => std::fs::read_to_string(&p).context("reading passphrase file")?,
         None => {
@@ -462,6 +467,8 @@ fn unlock(device: &str, name: &str, passphrase_file: Option<String>) -> Result<(
     let mut child = Command::new("cryptsetup")
         .args(["open", "--type", "luks2", "--key-file", "-", device, name])
         .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
         .spawn()
         .context("spawning cryptsetup")?;
     child
@@ -470,9 +477,20 @@ fn unlock(device: &str, name: &str, passphrase_file: Option<String>) -> Result<(
         .context("cryptsetup stdin")?
         .write_all(pass.as_bytes())
         .context("writing passphrase to cryptsetup")?;
-    let status = child.wait().context("waiting for cryptsetup")?;
-    if !status.success() {
-        bail!("could not open {device} (wrong passphrase?)");
+    let out = child.wait_with_output().context("waiting for cryptsetup")?;
+    if !out.status.success() {
+        let raw = String::from_utf8_lossy(&out.stderr);
+        let raw = raw.trim();
+        let hint = if raw.contains("in use") {
+            "the drive is already open"
+        } else if raw.contains("No key available") || raw.contains("No usable keyslot") {
+            "wrong passphrase"
+        } else if raw.is_empty() {
+            "cryptsetup failed"
+        } else {
+            raw
+        };
+        bail!("could not unlock {device}: {hint}");
     }
     Ok(())
 }

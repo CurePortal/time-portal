@@ -895,7 +895,7 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
     pass_title.set_halign(gtk::Align::Start);
     pass_page.append(&pass_title);
     let pass_hint = gtk::Label::new(Some(
-        "Enter the recovery passphrase you set when the drive was created.",
+        "Enter the recovery passphrase you set when the drive was created. If this drive is already unlocked on this machine, just press Unlock.",
     ));
     pass_hint.add_css_class("dim-label");
     pass_hint.set_wrap(true);
@@ -1104,8 +1104,13 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
         let pass_spinner = pass_spinner.clone();
         unlock_btn.connect_clicked(move |_| {
             let device = state.borrow().selected_device.clone().unwrap_or_default();
+            let already_open = std::path::Path::new(MAPPER_PATH).exists();
             let pw = pass_entry.text().to_string();
-            if device.is_empty() || pw.is_empty() {
+            if device.is_empty() {
+                toast(&overlay, "Choose a drive first");
+                return;
+            }
+            if pw.is_empty() && !already_open {
                 toast(&overlay, "Enter the passphrase");
                 return;
             }
@@ -1138,15 +1143,7 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
                 );
                 let _ = std::fs::remove_file(&secret_work);
                 r?;
-                exec(
-                    &helper_work,
-                    &[
-                        "mount".to_string(),
-                        MAPPER_PATH.to_string(),
-                        MOUNT_BASE.to_string(),
-                    ],
-                    true,
-                )?;
+                exec(&helper_work, &["mount-drive".to_string()], true)?;
                 Ok("Unlocked".to_string())
             };
             let on_done = move |res: Result<String, String>| match res {
