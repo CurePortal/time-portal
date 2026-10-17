@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.timeportal.TimePortal</id>
+
+  <name>Time Portal</name>
+  <summary>Back up and restore your machine with real, browsable btrfs snapshots</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <description>
+    <p>
+      Time Portal is Time Machine for Arch and Omarchy: every backup is a real,
+      browsable btrfs snapshot on an encrypted drive that looks exactly like your
+      machine at that moment, not an opaque archive.
+    </p>
+    <p>
+      It snapshots the system and home subvolumes, sends only the delta to a
+      LUKS-encrypted btrfs drive, and keeps versions on Time Machine's schedule
+      (hourly, then daily, monthly and yearly). Ownership, permissions, ACLs,
+      xattrs, symlinks and device nodes are all preserved, so restoring a single
+      file is a copy and restoring the machine is a subvolume swap.
+    </p>
+    <p>
+      Where other Linux tools stop short: the backup drive is a real filesystem
+      you can plug into any Linux machine and browse without special software;
+      many hourly versions stay small because they share copy-on-write extents;
+      and the drive is encrypted so the sent streams are never plaintext on the
+      disk.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">org.timeportal.TimePortal.desktop</launchable>
+
+  <provides>
+    <binary>time-portal</binary>
+  </provides>
+
+  <url type="homepage">https://github.com/cure/time-portal</url>
+  <url type="bugtracker">https://github.com/cure/time-portal/issues</url>
+
+  <developer id="io.github.cure">
+    <name>cure</name>
+  </developer>
+
+  <categories>
+    <category>Utility</category>
+    <category>Archiving</category>
+  </categories>
+
+  <keywords>
+    <keyword>backup</keyword>
+    <keyword>restore</keyword>
+    <keyword>snapshot</keyword>
+    <keyword>btrfs</keyword>
+    <keyword>time machine</keyword>
+  </keywords>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.1.0" date="2026-10-17">
+      <description>
+        <p>Initial release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

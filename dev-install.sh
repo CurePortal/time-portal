@@ -13,12 +13,17 @@ rm -f /usr/share/applications/btrfs-timemachine.desktop
 rm -f /usr/share/icons/hicolor/scalable/apps/btrfs-timemachine.svg
 rm -f /usr/share/polkit-1/actions/org.btrfstimemachine.policy
 rmdir /usr/lib/btrfs-timemachine 2>/dev/null || true
+# ...and the old, non-reverse-DNS desktop file name
+rm -f /usr/share/applications/time-portal.desktop
 
 install -Dm755 target/release/time-portal /usr/local/bin/time-portal
 install -Dm755 target/release/time-portal-helper \
   /usr/lib/time-portal/time-portal-helper
 
-install -Dm644 data/time-portal.desktop /usr/share/applications/time-portal.desktop
+install -Dm644 data/org.timeportal.TimePortal.desktop \
+  /usr/share/applications/org.timeportal.TimePortal.desktop
+install -Dm644 data/org.timeportal.TimePortal.metainfo.xml \
+  /usr/share/metainfo/org.timeportal.TimePortal.metainfo.xml
 install -Dm644 data/time-portal.svg \
   /usr/share/icons/hicolor/scalable/apps/time-portal.svg
 for s in 48 64 128 256; do

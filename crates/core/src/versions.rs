@@ -19,10 +19,9 @@ pub struct Version {
 pub fn classify(name: &str) -> Option<(String, bool, bool)> {
     if let Some(ts) = name.strip_prefix("@home.") {
         Some((ts.to_string(), false, true))
-    } else if let Some(ts) = name.strip_prefix("@.") {
-        Some((ts.to_string(), true, false))
     } else {
-        None
+        name.strip_prefix("@.")
+            .map(|ts| (ts.to_string(), true, false))
     }
 }
 
@@ -48,7 +47,12 @@ pub fn scan_versions(target: &Path) -> std::io::Result<Vec<Version>> {
     let mut out: Vec<Version> = map
         .into_iter()
         .filter_map(|(ts, (system, home))| {
-            parse_ts(&ts).map(|epoch| Version { ts, epoch, system, home })
+            parse_ts(&ts).map(|epoch| Version {
+                ts,
+                epoch,
+                system,
+                home,
+            })
         })
         .collect();
     out.sort_by_key(|v| v.epoch);
@@ -69,10 +73,14 @@ mod tests {
 
     #[test]
     fn classifies_names() {
-        assert_eq!(classify("@home.20261016T122217-0700"),
-                   Some(("20261016T122217-0700".into(), false, true)));
-        assert_eq!(classify("@.20261016T122217-0700"),
-                   Some(("20261016T122217-0700".into(), true, false)));
+        assert_eq!(
+            classify("@home.20261016T122217-0700"),
+            Some(("20261016T122217-0700".into(), false, true))
+        );
+        assert_eq!(
+            classify("@.20261016T122217-0700"),
+            Some(("20261016T122217-0700".into(), true, false))
+        );
         assert_eq!(classify("boot-esp"), None);
         assert_eq!(classify("@pkg.2026"), None);
     }

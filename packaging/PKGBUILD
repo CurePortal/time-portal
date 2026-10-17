@@ -38,8 +38,10 @@ package() {
     "$pkgdir/usr/lib/time-portal/time-portal-helper"
 
   # desktop integration + polkit action
-  install -Dm644 data/time-portal.desktop \
-    "$pkgdir/usr/share/applications/time-portal.desktop"
+  install -Dm644 data/org.timeportal.TimePortal.desktop \
+    "$pkgdir/usr/share/applications/org.timeportal.TimePortal.desktop"
+  install -Dm644 data/org.timeportal.TimePortal.metainfo.xml \
+    "$pkgdir/usr/share/metainfo/org.timeportal.TimePortal.metainfo.xml"
   install -Dm644 data/time-portal.svg \
     "$pkgdir/usr/share/icons/hicolor/scalable/apps/time-portal.svg"
   for size in 48 64 128 256; do

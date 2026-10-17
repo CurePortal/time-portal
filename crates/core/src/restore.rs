@@ -23,14 +23,7 @@ impl RestorePlan {
     pub fn summary(&self) -> Vec<String> {
         self.steps
             .iter()
-            .map(|s| {
-                format!(
-                    "{}: {} -> {}",
-                    s.what,
-                    s.source.display(),
-                    s.dest.display()
-                )
-            })
+            .map(|s| format!("{}: {} -> {}", s.what, s.source.display(), s.dest.display()))
             .collect()
     }
 }
@@ -66,7 +59,12 @@ mod tests {
 
     #[test]
     fn home_plan_points_at_the_user_inside_the_version() {
-        let p = plan_home(Path::new("/mnt/backup/portal"), "20261016T122217-0700", "cure", Path::new("/home/newuser"));
+        let p = plan_home(
+            Path::new("/mnt/backup/portal"),
+            "20261016T122217-0700",
+            "cure",
+            Path::new("/home/newuser"),
+        );
         assert_eq!(p.steps.len(), 1);
         assert_eq!(
             p.steps[0].source,
@@ -77,8 +75,15 @@ mod tests {
 
     #[test]
     fn system_plan_targets_the_root() {
-        let p = plan_system(Path::new("/mnt/backup/portal"), "20261016T122217-0700", Path::new("/mnt/target"));
-        assert_eq!(p.steps[0].source, PathBuf::from("/mnt/backup/portal/@.20261016T122217-0700"));
+        let p = plan_system(
+            Path::new("/mnt/backup/portal"),
+            "20261016T122217-0700",
+            Path::new("/mnt/target"),
+        );
+        assert_eq!(
+            p.steps[0].source,
+            PathBuf::from("/mnt/backup/portal/@.20261016T122217-0700")
+        );
         assert!(p.summary()[0].contains("system"));
     }
 }

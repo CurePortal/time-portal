@@ -16,12 +16,11 @@ use std::sync::{Arc, LazyLock, Mutex};
 use std::time::Duration;
 
 use adw::prelude::*;
-use gtk4 as gtk;
 use gtk::glib;
 use gtk::glib::ControlFlow;
-use gtk::prelude::*;
+use gtk4 as gtk;
 use ksni::blocking::TrayMethods;
-use ksni::menu::{CheckmarkItem, StandardItem};
+use ksni::menu::{CheckmarkItem, Disposition, StandardItem};
 use ksni::{Icon, MenuItem, ToolTip, Tray};
 use libadwaita as adw;
 
@@ -45,6 +44,7 @@ struct State {
 }
 
 #[derive(serde::Deserialize)]
+#[allow(dead_code)] // mirrors the helper's JSON; not every field is shown yet
 struct Disk {
     path: String,
     name: String,
@@ -63,14 +63,17 @@ enum Cmd {
     Open,
     Start,
     Stop,
+    Pause,
+    Resume,
     Quit,
-    SetKeep(bool),
+    SetKeep,
 }
 
 struct TmTray {
     tx: mpsc::Sender<Cmd>,
     keep: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
+    paused: Arc<AtomicBool>,
     status: Arc<Mutex<String>>,
 }
 
@@ -113,6 +116,15 @@ impl Tray for TmTray {
     }
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let running = self.running.load(Ordering::Relaxed);
+        let paused = self.paused.load(Ordering::Relaxed);
+        let status = self.status.lock().map(|g| g.clone()).unwrap_or_default();
+        // A live status line at the top of the menu, so hovering/opening shows
+        // exactly what is happening without opening the window.
+        let status_line = if status.is_empty() {
+            "Idle".to_string()
+        } else {
+            status
+        };
         vec![
             StandardItem {
                 label: "Open Time Portal".to_string(),
@@ -124,10 +136,36 @@ impl Tray for TmTray {
             .into(),
             MenuItem::Separator,
             StandardItem {
+                label: status_line,
+                enabled: false,
+                disposition: Disposition::Informative,
+                ..Default::default()
+            }
+            .into(),
+            MenuItem::Separator,
+            StandardItem {
                 label: "Back Up Now".to_string(),
                 visible: !running,
                 activate: Box::new(|t: &mut Self| {
                     let _ = t.tx.send(Cmd::Start);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: "Pause Backup".to_string(),
+                visible: running && !paused,
+                activate: Box::new(|t: &mut Self| {
+                    let _ = t.tx.send(Cmd::Pause);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: "Resume Backup".to_string(),
+                visible: running && paused,
+                activate: Box::new(|t: &mut Self| {
+                    let _ = t.tx.send(Cmd::Resume);
                 }),
                 ..Default::default()
             }
@@ -148,7 +186,7 @@ impl Tray for TmTray {
                 activate: Box::new(|t: &mut Self| {
                     let v = !t.keep.load(Ordering::Relaxed);
                     t.keep.store(v, Ordering::Relaxed);
-                    let _ = t.tx.send(Cmd::SetKeep(v));
+                    let _ = t.tx.send(Cmd::SetKeep);
                 }),
                 ..Default::default()
             }
@@ -238,7 +276,11 @@ fn exec(helper: &str, args: &[String], elevate: bool) -> Result<String, String> 
         Ok(o) if o.status.success() => Ok(String::from_utf8_lossy(&o.stdout).to_string()),
         Ok(o) => {
             let e = String::from_utf8_lossy(&o.stderr).trim().to_string();
-            Err(if e.is_empty() { "command failed".to_string() } else { e })
+            Err(if e.is_empty() {
+                "command failed".to_string()
+            } else {
+                e
+            })
         }
         Err(e) => Err(format!("could not run helper: {e}")),
     }
@@ -555,12 +597,14 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
     let (tray_tx, tray_rx) = mpsc::channel::<Cmd>();
     let keep_in_tray = Arc::new(AtomicBool::new(true));
     let tray_running = Arc::new(AtomicBool::new(false));
+    let tray_paused = Arc::new(AtomicBool::new(false));
     let tray_status = Arc::new(Mutex::new(String::new()));
     let bar_determinate = Arc::new(AtomicBool::new(false));
     let tray_handle = TmTray {
         tx: tray_tx,
         keep: keep_in_tray.clone(),
         running: tray_running.clone(),
+        paused: tray_paused.clone(),
         status: tray_status.clone(),
     }
     .spawn()
@@ -587,11 +631,23 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
                             let _ = exec(&h, &["stop-backup".to_string()], true);
                         });
                     }
+                    Cmd::Pause => {
+                        let h = helper_c.clone();
+                        std::thread::spawn(move || {
+                            let _ = exec(&h, &["pause-backup".to_string()], true);
+                        });
+                    }
+                    Cmd::Resume => {
+                        let h = helper_c.clone();
+                        std::thread::spawn(move || {
+                            let _ = exec(&h, &["resume-backup".to_string()], true);
+                        });
+                    }
                     Cmd::Quit => {
                         app_c.quit();
                         return ControlFlow::Break;
                     }
-                    Cmd::SetKeep(_) => {}
+                    Cmd::SetKeep => {}
                 }
             }
             ControlFlow::Continue
@@ -610,19 +666,8 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
         });
     }
 
-    // --- page: welcome ------------------------------------------------------
-    let welcome = gtk::Box::new(gtk::Orientation::Vertical, 18);
-    welcome.set_margin_top(18);
-    welcome.set_margin_bottom(18);
-    welcome.set_margin_start(18);
-    welcome.set_margin_end(18);
-
-    let status_group = adw::PreferencesGroup::new();
-    status_group.set_title("Backup");
-    let status_row = adw::ActionRow::builder().title("Time Portal").build();
-    status_group.add(&status_row);
-    let mut timer_enabled = false;
-    if let Ok(s) = exec(
+    // --- initial status snapshot (drives the first paint) -------------------
+    let init = exec(
         &helper,
         &[
             "status".to_string(),
@@ -630,37 +675,25 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
             state.borrow().target_root.clone(),
         ],
         false,
-    ) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&s) {
-            let mounted = v["mounted"].as_bool().unwrap_or(false);
-            let count = v["version_count"].as_u64().unwrap_or(0);
-            let running = v["running"].as_bool().unwrap_or(false);
-            timer_enabled = v["timer_enabled"].as_bool().unwrap_or(false);
-            let sub = if running {
-                "Backing up now…".to_string()
-            } else if mounted && count > 0 {
-                format!("Drive connected · {count} version(s)")
-            } else if mounted {
-                "Drive connected · no backups yet".to_string()
-            } else {
-                "No backup drive connected".to_string()
-            };
-            status_row.set_subtitle(&sub);
-        }
-    }
-    welcome.append(&status_group);
+    )
+    .ok()
+    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+    .unwrap_or_else(|| serde_json::json!({}));
+    let init_mounted = init["mounted"].as_bool().unwrap_or(false);
+    let init_drive = init["drive_present"].as_bool().unwrap_or(false);
+    let init_available = init_mounted || init_drive;
+    let init_count = init["version_count"].as_u64().unwrap_or(0);
+    let init_running = init["running"].as_bool().unwrap_or(false);
+    let init_timer = init["timer_enabled"].as_bool().unwrap_or(false);
 
-    // Live progress, shown only while a backup is running.
-    let progress_bar = gtk::ProgressBar::new();
-    progress_bar.set_pulse_step(0.08);
-    let progress_label = gtk::Label::new(None);
-    progress_label.set_halign(gtk::Align::Start);
-    progress_label.add_css_class("dim-label");
-    let progress_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    progress_box.append(&progress_bar);
-    progress_box.append(&progress_label);
-    progress_box.set_visible(false);
-    welcome.append(&progress_box);
+    // --- settings (modal) ---------------------------------------------------
+    // Schedule and application/tray options live here, not on the main page.
+    let settings = adw::PreferencesWindow::builder()
+        .transient_for(&window)
+        .modal(true)
+        .title("Settings")
+        .build();
+    let settings_page = adw::PreferencesPage::new();
 
     let sched_group = adw::PreferencesGroup::new();
     sched_group.set_title("Schedule");
@@ -669,14 +702,18 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
         .subtitle("Snapshot every hour and send the delta to the drive")
         .build();
     let sched_switch = gtk::Switch::new();
-    sched_switch.set_active(timer_enabled);
+    sched_switch.set_active(init_timer);
     sched_switch.set_valign(gtk::Align::Center);
     sched_row.add_suffix(&sched_switch);
     {
         let helper = helper.clone();
         let overlay = overlay.clone();
         sched_switch.connect_state_set(move |_, active| {
-            let cmd = if active { "enable-backup" } else { "disable-backup" };
+            let cmd = if active {
+                "enable-backup"
+            } else {
+                "disable-backup"
+            };
             match exec(&helper, &[cmd.to_string()], true) {
                 Ok(_) => glib::Propagation::Proceed,
                 Err(e) => {
@@ -687,7 +724,7 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
         });
     }
     sched_group.add(&sched_row);
-    welcome.append(&sched_group);
+    settings_page.add(&sched_group);
 
     let app_group = adw::PreferencesGroup::new();
     app_group.set_title("Application");
@@ -711,7 +748,53 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
         });
     }
     app_group.add(&keep_row);
-    welcome.append(&app_group);
+    settings_page.add(&app_group);
+
+    settings.add(&settings_page);
+
+    let settings_btn = gtk::Button::from_icon_name("emblem-system-symbolic");
+    settings_btn.set_tooltip_text(Some("Settings"));
+    {
+        let settings = settings.clone();
+        settings_btn.connect_clicked(move |_| settings.present());
+    }
+    header.pack_end(&settings_btn);
+
+    // --- page: welcome ------------------------------------------------------
+    let welcome = gtk::Box::new(gtk::Orientation::Vertical, 18);
+    welcome.set_margin_top(18);
+    welcome.set_margin_bottom(18);
+    welcome.set_margin_start(18);
+    welcome.set_margin_end(18);
+
+    let status_group = adw::PreferencesGroup::new();
+    status_group.set_title("Backup");
+    let status_row = adw::ActionRow::builder().title("Time Portal").build();
+    status_group.add(&status_row);
+    let sub = if init_running {
+        "Backing up now…".to_string()
+    } else if init_mounted && init_count > 0 {
+        format!("Drive connected · {init_count} version(s)")
+    } else if init_mounted {
+        "Drive connected · no backups yet".to_string()
+    } else {
+        "No backup drive connected".to_string()
+    };
+    status_row.set_subtitle(&sub);
+    status_group.set_visible(init_available);
+    welcome.append(&status_group);
+
+    // Live progress, shown only while a backup is running.
+    let progress_bar = gtk::ProgressBar::new();
+    progress_bar.set_pulse_step(0.08);
+    let progress_label = gtk::Label::new(None);
+    progress_label.set_halign(gtk::Align::Start);
+    progress_label.add_css_class("dim-label");
+    let progress_box = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    progress_box.append(&progress_bar);
+    progress_box.append(&progress_label);
+    progress_box.set_visible(false);
+    welcome.append(&progress_box);
 
     let btn_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let backup_btn = gtk::Button::with_label("Back Up Now");
@@ -737,10 +820,54 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
             }
         });
     }
+    let pause_btn = gtk::Button::with_label("Pause");
+    {
+        let helper = helper.clone();
+        let overlay = overlay.clone();
+        pause_btn.connect_clicked(move |_| {
+            match exec(&helper, &["pause-backup".to_string()], true) {
+                Ok(_) => toast(&overlay, "Backup paused — Resume when you're ready"),
+                Err(e) => toast(&overlay, &format!("Could not pause backup: {e}")),
+            }
+        });
+    }
+    let resume_btn = gtk::Button::with_label("Resume");
+    resume_btn.add_css_class("suggested-action");
+    {
+        let helper = helper.clone();
+        let overlay = overlay.clone();
+        resume_btn.connect_clicked(move |_| {
+            match exec(&helper, &["resume-backup".to_string()], true) {
+                Ok(_) => toast(&overlay, "Backup resumed"),
+                Err(e) => toast(&overlay, &format!("Could not resume backup: {e}")),
+            }
+        });
+    }
     btn_row.append(&backup_btn);
+    btn_row.append(&pause_btn);
+    btn_row.append(&resume_btn);
     btn_row.append(&stop_btn);
     stop_btn.set_visible(false);
+    pause_btn.set_visible(false);
+    resume_btn.set_visible(false);
+    backup_btn.set_visible(init_available && !init_running);
+    btn_row.set_visible(init_available);
     welcome.append(&btn_row);
+
+    // Setup leads the page when no backup drive is available (first-paint
+    // state; the poll keeps it in sync as drives come and go). It is appended
+    // before the restore group so, with the backup section hidden, it is the
+    // first thing shown.
+    let setup_group = adw::PreferencesGroup::new();
+    setup_group.set_title("Set up a new backup drive");
+    setup_group.set_description(Some(if init_available {
+        "Erase a spare disk and format it for Time Portal."
+    } else {
+        "No backup drive is available — plug yours in, or set one up below."
+    }));
+    setup_group.set_visible(!init_available);
+    let setup_rows: Rc<RefCell<Vec<gtk::Widget>>> = Rc::new(RefCell::new(Vec::new()));
+    welcome.append(&setup_group);
 
     let restore_group = adw::PreferencesGroup::new();
     restore_group.set_title("Restore from a backup drive");
@@ -752,13 +879,6 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
         .collect();
     fill_restore_group(&restore_group, &restore_rows, &initial_luks, &state, &stack);
     welcome.append(&restore_group);
-
-    // Filled once the format page exists (it needs that page's label).
-    let setup_group = adw::PreferencesGroup::new();
-    setup_group.set_title("Set up a new backup drive");
-    setup_group.set_description(Some("Erase a spare disk and format it for Time Portal."));
-    let setup_rows: Rc<RefCell<Vec<gtk::Widget>>> = Rc::new(RefCell::new(Vec::new()));
-    welcome.append(&setup_group);
 
     stack.add_named(&scroll(&welcome), Some("welcome"));
 
@@ -772,7 +892,9 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
     pass_title.add_css_class("title-2");
     pass_title.set_halign(gtk::Align::Start);
     pass_page.append(&pass_title);
-    let pass_hint = gtk::Label::new(Some("Enter the recovery passphrase you set when the drive was created."));
+    let pass_hint = gtk::Label::new(Some(
+        "Enter the recovery passphrase you set when the drive was created.",
+    ));
     pass_hint.add_css_class("dim-label");
     pass_hint.set_wrap(true);
     pass_hint.set_halign(gtk::Align::Start);
@@ -842,7 +964,7 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
     user_group.add(&user_row);
     let home_row = adw::EntryRow::builder()
         .title("Restore into")
-        .text(&std::env::var("HOME").unwrap_or_else(|_| "/root".to_string()))
+        .text(std::env::var("HOME").unwrap_or_else(|_| "/root".to_string()))
         .build();
     user_group.add(&home_row);
     restore_page.append(&user_group);
@@ -853,7 +975,9 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
 
     let sys_group = adw::PreferencesGroup::new();
     sys_group.set_title("The whole system");
-    sys_group.set_description(Some("Advanced. Use from a live USB; this overwrites system files."));
+    sys_group.set_description(Some(
+        "Advanced. Use from a live USB; this overwrites system files.",
+    ));
     let sys_row = adw::EntryRow::builder()
         .title("Restore into (mounted root)")
         .text("/")
@@ -1196,13 +1320,18 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
         let (tx, rx) = mpsc::channel::<String>();
         let rx = Rc::new(RefCell::new(rx));
         let status_row = status_row.clone();
+        let status_group = status_group.clone();
+        let btn_row = btn_row.clone();
         let progress_box = progress_box.clone();
         let progress_bar = progress_bar.clone();
         let progress_label = progress_label.clone();
         let backup_btn = backup_btn.clone();
         let stop_btn = stop_btn.clone();
+        let pause_btn = pause_btn.clone();
+        let resume_btn = resume_btn.clone();
         let handle = tray_handle.clone();
         let tray_running = tray_running.clone();
+        let tray_paused = tray_paused.clone();
         let tray_status = tray_status.clone();
         let bar_determinate = bar_determinate.clone();
         let restore_group = restore_group.clone();
@@ -1221,15 +1350,33 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
                 let t = target.clone();
                 let tx = tx.clone();
                 std::thread::spawn(move || {
-                    let st = exec(&h, &["status".to_string(), "--target".to_string(), t], false)
-                        .unwrap_or_default();
-                    let lu = exec(&h, &["probe".to_string()], false).unwrap_or_else(|_| "[]".to_string());
-                    let dk = exec(&h, &["disks".to_string()], false).unwrap_or_else(|_| "[]".to_string());
+                    let st = exec(
+                        &h,
+                        &["status".to_string(), "--target".to_string(), t],
+                        false,
+                    )
+                    .unwrap_or_default();
+                    let lu = exec(&h, &["probe".to_string()], false)
+                        .unwrap_or_else(|_| "[]".to_string());
+                    let dk = exec(&h, &["disks".to_string()], false)
+                        .unwrap_or_else(|_| "[]".to_string());
                     let payload = format!(
                         "{{\"status\":{},\"luks\":{},\"disks\":{}}}",
-                        if st.trim().is_empty() { "{}" } else { st.trim() },
-                        if lu.trim().is_empty() { "[]" } else { lu.trim() },
-                        if dk.trim().is_empty() { "[]" } else { dk.trim() },
+                        if st.trim().is_empty() {
+                            "{}"
+                        } else {
+                            st.trim()
+                        },
+                        if lu.trim().is_empty() {
+                            "[]"
+                        } else {
+                            lu.trim()
+                        },
+                        if dk.trim().is_empty() {
+                            "[]"
+                        } else {
+                            dk.trim()
+                        },
                     );
                     let _ = tx.send(payload);
                 });
@@ -1242,7 +1389,9 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
                         .as_array()
                         .map(|a| {
                             a.iter()
-                                .filter_map(|x| serde_json::from_value::<BlockDevice>(x.clone()).ok())
+                                .filter_map(|x| {
+                                    serde_json::from_value::<BlockDevice>(x.clone()).ok()
+                                })
                                 .filter(looks_like_backup)
                                 .collect()
                         })
@@ -1285,6 +1434,7 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
 
                     let v = &payload["status"];
                     let running = v["running"].as_bool().unwrap_or(false);
+                    let paused = v["paused"].as_bool().unwrap_or(false);
                     let mounted = v["mounted"].as_bool().unwrap_or(false);
                     let drive_present = v["drive_present"].as_bool().unwrap_or(false);
                     let count = v["version_count"].as_u64().unwrap_or(0);
@@ -1292,7 +1442,21 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
                     let percent = v["percent"].as_f64();
                     let done = v["done_bytes"].as_u64();
                     let total = v["total_bytes"].as_u64();
-                    let line = if running {
+                    let line = if paused {
+                        // Frozen in place: keep the last numbers, but say so.
+                        let mut parts = vec!["Paused".to_string()];
+                        if let (Some(pc), Some(t)) = (percent, total) {
+                            parts.push(format!(
+                                "{}% of {}",
+                                (pc * 100.0).round() as i64,
+                                human_bytes(t)
+                            ));
+                        }
+                        if let Some(d) = done {
+                            parts.push(format!("{} sent", human_bytes(d)));
+                        }
+                        parts.join(" · ")
+                    } else if running {
                         // One bar for the whole backup: never narrate which
                         // internal subvolume is in flight.
                         let mut parts = vec!["Backing up".to_string()];
@@ -1322,26 +1486,45 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
                         "No backup drive connected".to_string()
                     };
                     status_row.set_subtitle(&line);
-                    progress_box.set_visible(running);
-                    progress_label.set_text(if running { line.as_str() } else { "" });
+                    let available = mounted || drive_present;
+                    status_group.set_visible(available);
+                    progress_box.set_visible(running || paused);
+                    progress_label.set_text(if running || paused { line.as_str() } else { "" });
                     match percent {
-                        Some(pc) if running => {
+                        Some(pc) if running || paused => {
                             bar_determinate.store(true, Ordering::Relaxed);
                             progress_bar.set_fraction(pc.clamp(0.0, 1.0));
                         }
                         _ => bar_determinate.store(false, Ordering::Relaxed),
                     }
-                    backup_btn.set_visible(!running);
+                    backup_btn.set_visible(!running && available);
+                    pause_btn.set_visible(running && !paused);
+                    resume_btn.set_visible(running && paused);
                     stop_btn.set_visible(running);
+                    // Lead with setup when no backup drive is available; keep it
+                    // as a secondary section once one is, when a spare disk shows.
+                    btn_row.set_visible(available || running);
+                    setup_group.set_visible(!available || !disks.is_empty());
+                    setup_group.set_description(Some(if available {
+                        "Erase a spare disk and format it for Time Portal."
+                    } else {
+                        "No backup drive is available — plug yours in, or set one up below."
+                    }));
 
-                    let shown = if running { line.clone() } else { String::new() };
+                    let shown = if running || paused {
+                        line.clone()
+                    } else {
+                        String::new()
+                    };
                     tray_running.store(running, Ordering::Relaxed);
+                    tray_paused.store(paused, Ordering::Relaxed);
                     if let Ok(mut g) = tray_status.lock() {
                         *g = shown.clone();
                     }
                     if let Some(h) = &handle {
                         let _ = h.update(move |t: &mut TmTray| {
                             t.running.store(running, Ordering::Relaxed);
+                            t.paused.store(paused, Ordering::Relaxed);
                             if let Ok(mut g) = t.status.lock() {
                                 *g = shown.clone();
                             }
@@ -1356,9 +1539,13 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
     {
         let bar = progress_bar.clone();
         let running = tray_running.clone();
+        let paused = tray_paused.clone();
         let determinate = bar_determinate.clone();
         glib::timeout_add_local(Duration::from_millis(150), move || {
-            if running.load(Ordering::Relaxed) && !determinate.load(Ordering::Relaxed) {
+            if running.load(Ordering::Relaxed)
+                && !paused.load(Ordering::Relaxed)
+                && !determinate.load(Ordering::Relaxed)
+            {
                 bar.pulse();
             }
             ControlFlow::Continue
@@ -1388,7 +1575,11 @@ fn populate_versions(
         list.remove(&child);
     }
     let target = state.borrow().target_root.clone();
-    let versions = match exec(helper, &["list".to_string(), "--target".to_string(), target], false) {
+    let versions = match exec(
+        helper,
+        &["list".to_string(), "--target".to_string(), target],
+        false,
+    ) {
         Ok(s) => serde_json::from_str::<Vec<Version>>(&s).unwrap_or_default(),
         Err(e) => {
             toast(overlay, &format!("Could not read versions: {e}"));
@@ -1414,7 +1605,7 @@ fn populate_versions(
             _ => "unknown",
         };
         let row = adw::ActionRow::builder()
-            .title(&ts_when(&v.ts))
+            .title(ts_when(&v.ts))
             .subtitle(kind)
             .activatable(true)
             .build();

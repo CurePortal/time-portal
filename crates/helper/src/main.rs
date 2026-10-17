@@ -13,10 +13,14 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Parser)]
-#[command(name = "time-portal-helper", version, about = "Privileged backend for Time Portal")]
+#[command(
+    name = "time-portal-helper",
+    version,
+    about = "Privileged backend for Time Portal"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
@@ -74,10 +78,17 @@ enum Cmd {
     RunBackup,
     /// Unlock and mount the backup drive (idempotent).
     MountDrive,
+    /// Index the drive: delete incomplete backups so diffs can proceed.
+    Clean,
     /// Install the hotplug udev rule + mount service for the attached drive.
     InstallHooks,
     /// Stop the backup unit (non-blocking).
     StopBackup,
+    /// Pause a running backup in place (SIGSTOP the btrbk process tree), so it
+    /// can resume later from exactly where it stopped.
+    PauseBackup,
+    /// Resume a paused backup (SIGCONT), picking up mid-stream.
+    ResumeBackup,
     /// Enable the hourly backup timer.
     EnableBackup,
     /// Disable the hourly backup timer.
@@ -113,12 +124,25 @@ fn main() -> Result<()> {
         Cmd::Status { target } => status(&target),
         Cmd::List { target } => list(&target),
         Cmd::WriteManifest { target, host } => write_manifest(&target, host),
-        Cmd::Unlock { device, name, passphrase_file } => unlock(&device, &name, passphrase_file),
+        Cmd::Unlock {
+            device,
+            name,
+            passphrase_file,
+        } => unlock(&device, &name, passphrase_file),
         Cmd::Lock { name } => run("cryptsetup", &["close", &name]),
         Cmd::Mount { source, target } => mount(&source, &target),
         Cmd::Umount { target } => run("umount", &[&target]),
-        Cmd::Restore { source, dest, delete } => restore(&source, &dest, delete),
+        Cmd::Restore {
+            source,
+            dest,
+            delete,
+        } => restore(&source, &dest, delete),
         Cmd::StartBackup => {
+            // If a run is paused, "start" means "carry on" rather than launch a
+            // second one — the unit is still active (just frozen).
+            if paused() {
+                return resume_backup();
+            }
             // Mount the drive if it is attached but not mounted (a replug),
             // otherwise the service's mount-point conditions skip it silently.
             ensure_mounted().context("backup drive")?;
@@ -130,8 +154,11 @@ fn main() -> Result<()> {
             println!("{}", serde_json::json!({"mounted": true}));
             Ok(())
         }
+        Cmd::Clean => run("btrbk", &["clean"]),
         Cmd::InstallHooks => install_hooks(),
-        Cmd::StopBackup => run("systemctl", &["stop", "--no-block", "btrbk.service"]),
+        Cmd::StopBackup => stop_backup(),
+        Cmd::PauseBackup => pause_backup(),
+        Cmd::ResumeBackup => resume_backup(),
         Cmd::EnableBackup => run("systemctl", &["enable", "--now", "btrbk.timer"]),
         Cmd::DisableBackup => run("systemctl", &["disable", "--now", "btrbk.timer"]),
         Cmd::BackupEsp { source, dest } => backup_esp(&source, &dest),
@@ -165,7 +192,11 @@ fn backup_esp(source: &str, dest: &str) -> Result<()> {
 
 fn probe() -> Result<()> {
     let out = Command::new("lsblk")
-        .args(["-J", "-o", "NAME,PATH,TYPE,FSTYPE,LABEL,UUID,MOUNTPOINTS,SIZE"])
+        .args([
+            "-J",
+            "-o",
+            "NAME,PATH,TYPE,FSTYPE,LABEL,UUID,MOUNTPOINTS,SIZE",
+        ])
         .output()
         .context("running lsblk")?;
     let text = String::from_utf8(out.stdout).context("lsblk output not UTF-8")?;
@@ -177,13 +208,22 @@ fn probe() -> Result<()> {
 
 fn mounted(target: &str) -> bool {
     std::fs::read_to_string("/proc/mounts")
-        .map(|m| m.lines().any(|l| l.split_whitespace().nth(1) == Some(target)))
+        .map(|m| {
+            m.lines()
+                .any(|l| l.split_whitespace().nth(1) == Some(target))
+        })
         .unwrap_or(false)
 }
 
 fn run_seconds() -> Option<i64> {
     let ts = Command::new("systemctl")
-        .args(["show", "btrbk.service", "-p", "ExecMainStartTimestamp", "--value"])
+        .args([
+            "show",
+            "btrbk.service",
+            "-p",
+            "ExecMainStartTimestamp",
+            "--value",
+        ])
         .output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -192,13 +232,111 @@ fn run_seconds() -> Option<i64> {
         .args(["-d", &ts, "+%s"])
         .output()
         .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<i64>().ok())?;
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<i64>()
+                .ok()
+        })?;
     let now = Command::new("date")
         .arg("+%s")
         .output()
         .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<i64>().ok())?;
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<i64>()
+                .ok()
+        })?;
     Some(now - start)
+}
+
+// --- pausing / resuming a run ----------------------------------------------
+//
+// btrfs send/receive has no checkpoint of its own, so the only way to stop a
+// multi-hour run and continue from the same byte is to freeze the processes in
+// place: SIGSTOP leaves the pipe buffers and the partially-written receive
+// subvolume untouched, and SIGCONT picks up mid-stream. The unit keeps running
+// (active, just frozen), so the monitor and the UI stay honest. This survives
+// for as long as the machine stays up; a reboot or unplug still loses the
+// in-flight subvolume.
+
+/// Presence of this file marks the running backup as paused. It lives in the
+/// ephemeral /run next to the progress file.
+const PAUSE_PATH: &str = "/run/time-portal/paused";
+
+fn service_active() -> bool {
+    Command::new("systemctl")
+        .args(["is-active", "btrbk.service"])
+        .output()
+        .map(|o| {
+            let s = String::from_utf8_lossy(&o.stdout);
+            matches!(
+                s.trim(),
+                "active" | "activating" | "deactivating" | "reloading"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn pause_marker() -> bool {
+    Path::new(PAUSE_PATH).exists()
+}
+
+/// True only while a running backup is frozen; a marker left behind by a crash
+/// or reboot does not count.
+fn paused() -> bool {
+    pause_marker() && service_active()
+}
+
+fn signal_service(sig: &str) -> Result<()> {
+    run(
+        "systemctl",
+        &["kill", &format!("--signal={sig}"), "btrbk.service"],
+    )
+}
+
+fn pause_backup() -> Result<()> {
+    if !service_active() {
+        bail!("no backup is running");
+    }
+    if pause_marker() {
+        return Ok(());
+    }
+    std::fs::create_dir_all("/run/time-portal").ok();
+    signal_service("SIGSTOP").context("pausing the backup")?;
+    std::fs::write(PAUSE_PATH, format!("{}\n", epoch())).context("writing the pause marker")?;
+    // Re-publish the last known progress with a fresh timestamp so the UI keeps
+    // its bar and percentage while the (now frozen) monitor cannot update it.
+    let prev = read_progress_raw();
+    write_progress(
+        &serde_json::json!({
+            "phase": "Paused",
+            "paused": true,
+            "done_bytes": prev.as_ref().and_then(|p| p["done_bytes"].as_u64()),
+            "total_bytes": prev.as_ref().and_then(|p| p["total_bytes"].as_u64()),
+            "percent": prev.as_ref().and_then(|p| p["percent"].as_f64()),
+            "updated_epoch": epoch(),
+        })
+        .to_string(),
+    );
+    Ok(())
+}
+
+fn resume_backup() -> Result<()> {
+    let _ = std::fs::remove_file(PAUSE_PATH);
+    if !service_active() {
+        return Ok(());
+    }
+    signal_service("SIGCONT").context("resuming the backup")
+}
+
+fn stop_backup() -> Result<()> {
+    // SIGCONT before stopping: a frozen process cannot act on SIGTERM, so
+    // without this systemd would wait out TimeoutStopSec before SIGKILL.
+    let _ = std::fs::remove_file(PAUSE_PATH);
+    let _ = signal_service("SIGCONT");
+    run("systemctl", &["stop", "--no-block", "btrbk.service"])
 }
 
 fn status(target: &str) -> Result<()> {
@@ -209,7 +347,10 @@ fn status(target: &str) -> Result<()> {
         .output()
         .map(|o| {
             let s = String::from_utf8_lossy(&o.stdout);
-            matches!(s.trim(), "active" | "activating" | "deactivating" | "reloading")
+            matches!(
+                s.trim(),
+                "active" | "activating" | "deactivating" | "reloading"
+            )
         })
         .unwrap_or(false);
     let timer_enabled = Command::new("systemctl")
@@ -225,8 +366,11 @@ fn status(target: &str) -> Result<()> {
             .map(|p| mounted(&p.to_string_lossy()))
             .unwrap_or(false);
     let drive_present = backup_luks_device().is_some() || Path::new("/dev/mapper/backup").exists();
+    let paused = pause_marker() && running;
     let prog = read_progress();
-    let phase = if running {
+    let phase = if paused {
+        "Paused".to_string()
+    } else if running {
         prog.as_ref()
             .and_then(|p| p["phase"].as_str())
             .map(str::to_string)
@@ -245,6 +389,7 @@ fn status(target: &str) -> Result<()> {
         "mounted": is_mounted,
         "drive_present": drive_present,
         "running": running,
+        "paused": paused,
         "timer_enabled": timer_enabled,
         "phase": phase,
         "run_seconds": secs,
@@ -293,7 +438,9 @@ fn unlock(device: &str, name: &str, passphrase_file: Option<String>) -> Result<(
         Some(p) => std::fs::read_to_string(&p).context("reading passphrase file")?,
         None => {
             let mut s = String::new();
-            std::io::stdin().read_to_string(&mut s).context("reading passphrase from stdin")?;
+            std::io::stdin()
+                .read_to_string(&mut s)
+                .context("reading passphrase from stdin")?;
             s
         }
     };
@@ -321,19 +468,21 @@ fn unlock(device: &str, name: &str, passphrase_file: Option<String>) -> Result<(
 /// The attached Time Portal drive, identified by its LUKS label.
 fn backup_luks_device() -> Option<String> {
     let out = Command::new("lsblk")
-        .args(["-J", "-o", "NAME,PATH,TYPE,FSTYPE,LABEL,UUID,MOUNTPOINTS,SIZE"])
+        .args([
+            "-J",
+            "-o",
+            "NAME,PATH,TYPE,FSTYPE,LABEL,UUID,MOUNTPOINTS,SIZE",
+        ])
         .output()
         .ok()?;
-    let devs =
-        timeportal_core::devices::parse_lsblk(&String::from_utf8_lossy(&out.stdout)).ok()?;
+    let devs = timeportal_core::devices::parse_lsblk(&String::from_utf8_lossy(&out.stdout)).ok()?;
     let mut flat = Vec::new();
     for d in &devs {
         d.flatten(&mut flat);
     }
     flat.into_iter()
         .find(|d| {
-            d.fstype.as_deref() == Some("crypto_LUKS")
-                && d.label.as_deref() == Some("backup-crypt")
+            d.fstype.as_deref() == Some("crypto_LUKS") && d.label.as_deref() == Some("backup-crypt")
         })
         .map(|d| d.path.clone())
 }
@@ -378,10 +527,16 @@ fn install_hooks() -> Result<()> {
         "[Unit]\nDescription=Unlock and mount the Time Portal backup drive\nAfter=local-fs.target\n\n[Service]\nType=oneshot\nExecStart=/usr/lib/time-portal/time-portal-helper mount-drive\n",
     )
     .context("writing time-portal-mount.service")?;
-    let _ = Command::new("udevadm").args(["control", "--reload-rules"]).status();
-    let _ = Command::new("udevadm").args(["trigger", "--subsystem-match=block"]).status();
+    let _ = Command::new("udevadm")
+        .args(["control", "--reload-rules"])
+        .status();
+    let _ = Command::new("udevadm")
+        .args(["trigger", "--subsystem-match=block"])
+        .status();
     let _ = Command::new("systemctl").arg("daemon-reload").status();
-    let _ = Command::new("systemctl").args(["start", "time-portal-mount.service"]).status();
+    let _ = Command::new("systemctl")
+        .args(["start", "time-portal-mount.service"])
+        .status();
     println!("{}", serde_json::json!({"ok": true, "luks_uuid": uuid}));
     Ok(())
 }
@@ -504,7 +659,11 @@ fn append_line(file: &str, line: &str) -> Result<()> {
 
 fn disks() -> Result<()> {
     let out = Command::new("lsblk")
-        .args(["-J", "-o", "NAME,PATH,TYPE,FSTYPE,LABEL,UUID,MOUNTPOINTS,SIZE"])
+        .args([
+            "-J",
+            "-o",
+            "NAME,PATH,TYPE,FSTYPE,LABEL,UUID,MOUNTPOINTS,SIZE",
+        ])
         .output()
         .context("running lsblk")?;
     let devs = timeportal_core::devices::parse_lsblk(&String::from_utf8_lossy(&out.stdout))
@@ -516,7 +675,9 @@ fn disks() -> Result<()> {
     let list: Vec<serde_json::Value> = flat
         .iter()
         .filter(|d| d.dtype == "disk" || d.dtype == "part")
-        .filter(|d| !(d.name.starts_with("zram") || d.name.starts_with("loop") || d.name.starts_with("ram")))
+        .filter(|d| {
+            !(d.name.starts_with("zram") || d.name.starts_with("loop") || d.name.starts_with("ram"))
+        })
         .map(|d| {
             serde_json::json!({
                 "name": d.name,
@@ -613,16 +774,33 @@ fn format_drive(
     .context("luksAddKey failed")?;
 
     // 3. open, mkfs, close
-    run_str("cryptsetup", &["open".into(), "--key-file".into(), keyfile.into(), device.into(), mapper.into()])?;
-    run_str("mkfs.btrfs", &["-L".into(), "BACKUP".into(), mapper_path.clone()])?;
+    run_str(
+        "cryptsetup",
+        &[
+            "open".into(),
+            "--key-file".into(),
+            keyfile.into(),
+            device.into(),
+            mapper.into(),
+        ],
+    )?;
+    run_str(
+        "mkfs.btrfs",
+        &["-L".into(), "BACKUP".into(), mapper_path.clone()],
+    )?;
     let _ = Command::new("cryptsetup").args(["close", mapper]).status();
 
     // 4. persist unlock + mounts
     let luks_uuid = blkid_uuid(device).context("reading the LUKS UUID")?;
-    append_line("/etc/crypttab", &format!("{mapper} UUID={luks_uuid} {keyfile} luks,nofail"))?;
+    append_line(
+        "/etc/crypttab",
+        &format!("{mapper} UUID={luks_uuid} {keyfile} luks,nofail"),
+    )?;
     append_line(
         "/etc/fstab",
-        &format!("/dev/mapper/{mapper} {mount_base} btrfs defaults,noatime,compress=zstd:3,nofail 0 0"),
+        &format!(
+            "/dev/mapper/{mapper} {mount_base} btrfs defaults,noatime,compress=zstd:3,nofail 0 0"
+        ),
     )?;
     append_line(
         "/etc/fstab",
@@ -640,19 +818,34 @@ fn format_drive(
         "/etc/systemd/system/time-portal-mount.service",
         "[Unit]\nDescription=Unlock and mount the Time Portal backup drive\nAfter=local-fs.target\n\n[Service]\nType=oneshot\nExecStart=/usr/lib/time-portal/time-portal-helper mount-drive\n",
     )?;
-    let _ = Command::new("udevadm").args(["control", "--reload-rules"]).status();
-    let _ = Command::new("udevadm").args(["trigger", "--subsystem-match=block"]).status();
+    let _ = Command::new("udevadm")
+        .args(["control", "--reload-rules"])
+        .status();
+    let _ = Command::new("udevadm")
+        .args(["trigger", "--subsystem-match=block"])
+        .status();
     let _ = Command::new("systemctl").arg("daemon-reload").status();
 
     // 6. open + mount both sides
-    run_str("cryptsetup", &["open".into(), "--key-file".into(), keyfile.into(), device.into(), mapper.into()])?;
+    run_str(
+        "cryptsetup",
+        &[
+            "open".into(),
+            "--key-file".into(),
+            keyfile.into(),
+            device.into(),
+            mapper.into(),
+        ],
+    )?;
     std::fs::create_dir_all(mount_base)?;
     run_str("mount", &[mapper_path.clone(), mount_base.into()])?;
     std::fs::create_dir_all("/mnt/btrfs")?;
     run_str("mount", &["/mnt/btrfs".into()])?;
 
     // 7. layout + manifest, and switch on the schedule
-    let host = host.or_else(hostname).unwrap_or_else(|| "unknown".to_string());
+    let host = host
+        .or_else(hostname)
+        .unwrap_or_else(|| "unknown".to_string());
     let target = format!("{mount_base}/{host}");
     std::fs::create_dir_all(&target)?;
     std::fs::create_dir_all("/mnt/btrfs/btrbk_snapshots")?;
@@ -664,7 +857,9 @@ fn format_drive(
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
     m.save(Path::new(&target))?;
-    let _ = Command::new("systemctl").args(["enable", "--now", "btrbk.timer"]).status();
+    let _ = Command::new("systemctl")
+        .args(["enable", "--now", "btrbk.timer"])
+        .status();
 
     println!(
         "{}",
@@ -769,10 +964,7 @@ fn recv_pid() -> Option<u32> {
 /// UI can show one bar: the sizes of the sibling snapshots (`@` and `@home`,
 /// same timestamp) sum to the whole backup, and any already sent are counted
 /// as done. Returns (grand_total, completed_before_current).
-fn run_totals(
-    snap: &str,
-    totals: &mut HashMap<String, u64>,
-) -> (u64, u64) {
+fn run_totals(snap: &str, totals: &mut HashMap<String, u64>) -> (u64, u64) {
     let path = Path::new(snap);
     let Some(base) = path.file_name().map(|s| s.to_string_lossy().to_string()) else {
         return (0, 0);
@@ -815,13 +1007,34 @@ fn proc_write_bytes(pid: u32) -> Option<u64> {
 }
 
 fn btrfs_du_total(path: &str) -> Option<u64> {
-    let out = Command::new("btrfs")
+    // Bounded: this runs on every progress tick and can be slow on a huge
+    // snapshot. If it overruns we drop the total (progress falls back) rather
+    // than block the monitor — which would keep the oneshot service stuck.
+    let mut child = Command::new("btrfs")
         .args(["filesystem", "du", "-s", "--raw", "--", path])
-        .output()
+        .stdout(Stdio::piped())
+        .spawn()
         .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let last = text.lines().filter(|l| !l.trim().is_empty()).last()?;
-    last.split_whitespace().next()?.parse::<u64>().ok()
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        match child.try_wait().ok()? {
+            Some(status) => {
+                if !status.success() {
+                    return None;
+                }
+                let mut out = String::new();
+                child.stdout.take()?.read_to_string(&mut out).ok()?;
+                let last = out.lines().rfind(|l| !l.trim().is_empty())?;
+                return last.split_whitespace().next()?.parse::<u64>().ok();
+            }
+            None if Instant::now() > deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            None => std::thread::sleep(Duration::from_millis(200)),
+        }
+    }
 }
 
 fn write_progress(json: &str) {
@@ -834,7 +1047,12 @@ fn write_progress(json: &str) {
 }
 
 fn monitor(totals: &mut HashMap<String, u64>) {
-    let phase = detect_phase();
+    let paused_now = pause_marker();
+    let phase = if paused_now {
+        "Paused".to_string()
+    } else {
+        detect_phase()
+    };
     let info = send_info();
     let snap = info.as_ref().map(|(p, _)| p.clone());
     let full = info.as_ref().map(|(_, f)| *f).unwrap_or(false);
@@ -860,6 +1078,7 @@ fn monitor(totals: &mut HashMap<String, u64>) {
     };
     let json = serde_json::json!({
         "phase": phase,
+        "paused": paused_now,
         "snapshot": snap,
         "full": full,
         "done_bytes": done,
@@ -874,10 +1093,24 @@ fn monitor(totals: &mut HashMap<String, u64>) {
 /// can read the receive process's byte counts and the snapshot sizes.
 fn run_backup() -> Result<()> {
     std::fs::create_dir_all("/run/time-portal").ok();
+    // A fresh run must not inherit a stale pause marker from a previous one.
+    let _ = std::fs::remove_file(PAUSE_PATH);
     let mut totals: HashMap<String, u64> = HashMap::new();
-    write_progress(&serde_json::json!({"phase": "Starting", "updated_epoch": epoch()}).to_string());
 
-    let mut child = Command::new("btrbk").arg("run").spawn().context("spawning btrbk")?;
+    // Index the drive first and drop any incomplete (garbled) subvolumes left
+    // by an interrupted run. Without this, btrbk refuses to write into that
+    // subvolume and *skips the whole backup*, so neither the index nor the
+    // incremental diff can happen.
+    write_progress(
+        &serde_json::json!({"phase": "Indexing the drive", "updated_epoch": epoch()}).to_string(),
+    );
+    let _ = Command::new("btrbk").arg("clean").status();
+
+    write_progress(&serde_json::json!({"phase": "Starting", "updated_epoch": epoch()}).to_string());
+    let mut child = Command::new("btrbk")
+        .arg("run")
+        .spawn()
+        .context("spawning btrbk")?;
     loop {
         match child.try_wait().context("waiting for btrbk")? {
             Some(status) => {
@@ -892,18 +1125,27 @@ fn run_backup() -> Result<()> {
     }
 }
 
-fn read_progress() -> Option<serde_json::Value> {
+fn read_progress_raw() -> Option<serde_json::Value> {
     let s = std::fs::read_to_string(PROGRESS_PATH).ok()?;
-    let v: serde_json::Value = serde_json::from_str(&s).ok()?;
+    serde_json::from_str(&s).ok()
+}
+
+fn read_progress() -> Option<serde_json::Value> {
+    let v = read_progress_raw()?;
     let u = v["updated_epoch"].as_u64().unwrap_or(0);
-    if epoch().saturating_sub(u) > 20 {
+    // While paused the monitor is frozen and cannot refresh the file, so a
+    // stale timestamp is expected and still holds the numbers we want to keep.
+    if !paused() && epoch().saturating_sub(u) > 20 {
         return None;
     }
     Some(v)
 }
 
 fn run(program: &str, args: &[&str]) -> Result<()> {
-    let status = Command::new(program).args(args).status().with_context(|| format!("running {program}"))?;
+    let status = Command::new(program)
+        .args(args)
+        .status()
+        .with_context(|| format!("running {program}"))?;
     if !status.success() {
         bail!("{program} failed ({status})");
     }
@@ -911,7 +1153,10 @@ fn run(program: &str, args: &[&str]) -> Result<()> {
 }
 
 fn run_str(program: &str, args: &[String]) -> Result<()> {
-    let status = Command::new(program).args(args).status().with_context(|| format!("running {program}"))?;
+    let status = Command::new(program)
+        .args(args)
+        .status()
+        .with_context(|| format!("running {program}"))?;
     if !status.success() {
         bail!("{program} failed ({status})");
     }
