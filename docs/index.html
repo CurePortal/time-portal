@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Time Portal — Time Machine for Arch and Omarchy</title>
+<meta name="description" content="Back up and restore your machine with real, browsable btrfs snapshots on an encrypted drive. Time Machine for Arch and Omarchy.">
+<meta property="og:title" content="Time Portal — Time Machine for Arch and Omarchy">
+<meta property="og:description" content="Real, browsable btrfs snapshots on an encrypted drive — not an opaque archive.">
+<meta property="og:type" content="website">
+<link rel="icon" href="time-portal.svg" type="image/svg+xml">
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#11151c; --panel2:#0e1219; --line:#1e2632;
+    --fg:#e6edf3; --dim:#9aa7b4; --faint:#69737f;
+    --amber:#ffb454; --teal:#58d6c4; --red:#ff7b72; --green:#7ee787;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);line-height:1.6;
+    background-image:radial-gradient(1200px 600px at 70% -10%,rgba(255,180,84,.10),transparent 60%),
+                     radial-gradient(900px 500px at 10% 0%,rgba(88,214,196,.08),transparent 55%);}
+  a{color:var(--teal);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:1040px;margin:0 auto;padding:0 22px}
+  code{font-family:var(--mono);font-size:.92em}
+  .muted{color:var(--dim)}
+
+  header.nav{position:sticky;top:0;z-index:10;backdrop-filter:blur(10px);
+    background:rgba(11,14,20,.72);border-bottom:1px solid var(--line)}
+  .nav .wrap{display:flex;align-items:center;gap:14px;height:60px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:.2px}
+  .brand img{width:26px;height:26px}
+  .nav nav{margin-left:auto;display:flex;gap:18px;font-size:.92rem}
+  .nav a{color:var(--dim)}
+  .nav a:hover{color:var(--fg)}
+
+  .hero{padding:72px 0 40px;text-align:center}
+  .hero img.logo{width:96px;height:96px;filter:drop-shadow(0 8px 30px rgba(255,180,84,.25))}
+  .hero h1{font-size:clamp(2.2rem,6vw,3.6rem);margin:.2em 0 .1em;letter-spacing:-.02em}
+  .hero .tag{font-size:clamp(1.05rem,2.6vw,1.35rem);color:var(--fg);margin:0 auto;max-width:720px}
+  .hero .sub{color:var(--dim);max-width:680px;margin:14px auto 0}
+  .cta{margin-top:26px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+  .btn{display:inline-flex;align-items:center;gap:8px;padding:10px 18px;border-radius:10px;
+    border:1px solid var(--line);background:var(--panel);color:var(--fg);font-weight:600;font-size:.95rem}
+  .btn:hover{border-color:var(--amber);text-decoration:none}
+  .btn.primary{background:linear-gradient(180deg,#ffc670,#ffb454);color:#2a1c00;border-color:#ffb454}
+
+  .install{margin:26px auto 0;max-width:560px;display:flex;align-items:center;gap:0;
+    border:1px solid var(--line);border-radius:12px;background:var(--panel2);overflow:hidden}
+  .install pre{margin:0;padding:14px 16px;flex:1;overflow-x:auto;color:var(--fg)}
+  .install .pfx{color:var(--faint)}
+  .install button{border:0;border-left:1px solid var(--line);background:transparent;color:var(--dim);
+    padding:0 16px;height:100%;cursor:pointer;font:inherit;font-weight:600}
+  .install button:hover{color:var(--amber)}
+
+  section{padding:56px 0}
+  h2{font-size:1.6rem;letter-spacing:-.01em;margin:0 0 6px}
+  .lead{color:var(--dim);max-width:760px}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;margin-top:26px}
+  .card{border:1px solid var(--line);border-radius:14px;background:linear-gradient(180deg,var(--panel),var(--panel2));
+    padding:20px}
+  .card h3{margin:0 0 6px;font-size:1.02rem}
+  .card p{margin:0;color:var(--dim);font-size:.94rem}
+  .card .ico{font-size:1.3rem;margin-bottom:8px;display:block}
+
+  .diagram{margin-top:22px;border:1px solid var(--line);border-radius:14px;background:var(--panel2);
+    padding:18px 20px;overflow-x:auto}
+  .diagram pre{margin:0;color:var(--fg);font-family:var(--mono);font-size:.86rem;line-height:1.5}
+  .diagram .c1{color:var(--amber)} .diagram .c2{color:var(--teal)} .diagram .c3{color:var(--faint)}
+
+  .tablewrap{margin-top:22px;overflow-x:auto;border:1px solid var(--line);border-radius:14px}
+  table{border-collapse:collapse;width:100%;min-width:760px;font-size:.9rem}
+  th,td{text-align:left;padding:11px 14px;border-bottom:1px solid var(--line)}
+  thead th{background:var(--panel);color:var(--fg);font-weight:600;position:sticky;top:0}
+  tbody tr:hover{background:rgba(255,255,255,.02)}
+  td:nth-child(2){color:var(--amber);font-weight:600}
+  .yes{color:var(--green)} .no{color:var(--red)} .part{color:var(--amber)}
+
+  .twocol{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:22px}
+  @media(max-width:720px){.twocol{grid-template-columns:1fr}.nav nav{display:none}}
+  .codeblock{border:1px solid var(--line);border-radius:12px;background:var(--panel2);padding:16px 18px;overflow-x:auto}
+  .codeblock pre{margin:0;font-family:var(--mono);font-size:.86rem;color:var(--fg)}
+  .codeblock .c{color:var(--faint)}
+
+  footer{border-top:1px solid var(--line);padding:34px 0;color:var(--faint);font-size:.9rem}
+  footer .wrap{display:flex;gap:16px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+  .pill{display:inline-block;padding:2px 10px;border-radius:999px;border:1px solid var(--line);
+    color:var(--dim);font-size:.78rem;font-family:var(--mono)}
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <span class="brand"><img src="time-portal.svg" alt=""> Time Portal</span>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#how">How it works</a>
+      <a href="#compare">Compare</a>
+      <a href="#install">Install</a>
+      <a href="https://github.com/CurePortal/time-portal">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap hero">
+  <img class="logo" src="time-portal.svg" alt="Time Portal">
+  <h1>Time Portal</h1>
+  <p class="tag">Time Machine for Arch and Omarchy.</p>
+  <p class="sub">Every backup is a real, browsable btrfs snapshot on an encrypted
+    drive that looks exactly like your machine at that moment — not an opaque
+    archive. Restoring a file is a copy; restoring the machine is a subvolume swap.</p>
+
+  <div class="install">
+    <pre><span class="pfx">$ </span>yay -S time-portal</pre>
+    <button id="copy" title="Copy">Copy</button>
+  </div>
+
+  <div class="cta">
+    <a class="btn primary" href="#install">Install</a>
+    <a class="btn" href="https://github.com/CurePortal/time-portal">View source</a>
+    <a class="btn" href="https://aur.archlinux.org/packages/time-portal">AUR</a>
+  </div>
+</div>
+
+<section id="features"><div class="wrap">
+  <h2>What you get</h2>
+  <p class="lead">The four things that make Time Machine Time Machine — a copy-on-write
+    filesystem, hourly incremental deltas, tiered retention, and versions you can
+    actually see — with btrfs in APFS's seat.</p>
+  <div class="grid">
+    <div class="card"><span class="ico">🗂️</span><h3>Browsable snapshots</h3>
+      <p>The backup drive is an ordinary btrfs filesystem. Plug it into any Linux box and read last Tuesday's files with <code>ls</code> and <code>cp</code> — no special software, no repository format.</p></div>
+    <div class="card"><span class="ico">🔒</span><h3>Encrypted at rest</h3>
+      <p>LUKS on the drive. A keyfile unlocks it automatically here; a recovery passphrase opens it on a machine that has never seen your keys.</p></div>
+    <div class="card"><span class="ico">⚡</span><h3>Incremental &amp; cheap</h3>
+      <p><code>btrfs send -p</code> moves only the delta, and versions share copy-on-write extents — so many hourly versions stay small.</p></div>
+    <div class="card"><span class="ico">🧬</span><h3>Whole-machine fidelity</h3>
+      <p>Ownership, permissions, ACLs, xattrs, symlinks, hardlinks and device nodes — preserved as real filesystem state, not a userspace copy.</p></div>
+    <div class="card"><span class="ico">♻️</span><h3>Restore in place</h3>
+      <p>Copy a single file, or rebuild the whole system by swapping a subvolume. Works from a live USB onto a brand-new machine.</p></div>
+    <div class="card"><span class="ico">⏸️</span><h3>Pause &amp; resume</h3>
+      <p>A 14-hour first run can be frozen mid-stream and continued from the same byte — from the app or the tray.</p></div>
+    <div class="card"><span class="ico">🖥️</span><h3>Native desktop app</h3>
+      <p>A GTK4 / libadwaita window plus a system-tray icon with live status (phase, percent, bytes) and Pause / Resume / Stop.</p></div>
+    <div class="card"><span class="ico">🕒</span><h3>Time Machine cadence</h3>
+      <p>Hourly snapshots with <code>24h / 30d / 12m / 3y</code> retention, scheduled by systemd.</p></div>
+  </div>
+</div></section>
+
+<section id="how"><div class="wrap">
+  <h2>How it works</h2>
+  <p class="lead">Snapshots of the system and home subvolumes, sent as deltas to an
+    encrypted drive. Versions are real subvolumes, so the drive is a filesystem you
+    can browse — and hand to a new computer.</p>
+  <div class="diagram"><pre>
+<span class="c3">  your machine</span> <span class="c2">(btrfs, subvols @ and @home, LUKS-encrypted)</span>
+        │  <span class="c1">btrbk</span>: read-only snapshot  →  <span class="c1">btrfs send -p</span> (delta)
+        ▼
+<span class="c3">  backup drive</span> <span class="c2">(LUKS + btrfs)</span>
+        └─ portal/@.&lt;timestamp&gt;        full tree of the root filesystem
+           portal/@home.&lt;timestamp&gt;    full tree of /home
+           portal/boot-esp/            the vfat ESP, mirrored
+           portal/.timeportal.json     self-describing manifest
+  </pre></div>
+</div></section>
+
+<section id="compare"><div class="wrap">
+  <h2>How it compares</h2>
+  <p class="lead">These tools solve different problems. Time Portal is not a
+    replacement for snapper or restic — it is the piece of the Time Machine puzzle
+    they don't cover.</p>
+  <div class="tablewrap"><table>
+    <thead><tr><th></th><th>Time Portal</th><th>snapper + Limine</th><th>omarchy-time-machine (restic)</th><th>Timeshift</th><th>Back In Time</th></tr></thead>
+    <tbody>
+      <tr><td>The job</td><td>Whole-machine backup to a drive</td><td>Instant rollback</td><td>Off-site / cloud archive</td><td>System restore points</td><td>File backup</td></tr>
+      <tr><td>Engine</td><td>btrfs send/receive (btrbk)</td><td>btrfs snapshots</td><td>restic</td><td>rsync / btrfs</td><td>rsync</td></tr>
+      <tr><td>Browsable medium</td><td class="yes">yes</td><td class="yes">yes (local only)</td><td class="no">no — opaque repo</td><td class="part">partial</td><td class="yes">yes</td></tr>
+      <tr><td>Survives disk failure / theft</td><td class="yes">yes</td><td class="no">no</td><td class="yes">yes</td><td class="part">partial</td><td class="yes">yes</td></tr>
+      <tr><td>Encrypted at rest</td><td class="yes">LUKS</td><td class="no">no</td><td class="yes">yes</td><td class="no">no</td><td class="part">optional</td></tr>
+      <tr><td>Preserves ACLs, xattrs, device nodes</td><td class="yes">yes</td><td class="yes">yes</td><td class="part">userspace copy</td><td class="part">partial</td><td class="part">partial</td></tr>
+      <tr><td>Restore whole machine onto a new box</td><td class="yes">subvolume swap</td><td class="no">no</td><td class="part">extract a tree</td><td class="no">no</td><td class="part">partial</td></tr>
+      <tr><td>Restore one file without special tools</td><td class="yes">yes (cp)</td><td class="part">local only</td><td class="no">no (needs restic)</td><td class="part">partial</td><td class="yes">yes</td></tr>
+      <tr><td>Network / NAS / S3 targets</td><td class="no">no (drive only)</td><td class="no">no</td><td class="yes">yes</td><td class="no">no</td><td class="no">no</td></tr>
+      <tr><td>GUI</td><td>GTK4 app + tray</td><td>CLI / boot menu</td><td>Quickshell panel</td><td>GTK</td><td>GTK/Qt</td></tr>
+    </tbody>
+  </table></div>
+  <p class="lead" style="margin-top:18px">
+    Keep <strong>snapper</strong> for rollback, keep <strong>restic</strong> for the
+    cloud/NAS copy, and use <strong>Time Portal</strong> for the encrypted, browsable,
+    whole-machine backup on the drive in your bag — the one you can hand to a new
+    computer and boot from.</p>
+</div></section>
+
+<section id="install"><div class="wrap">
+  <h2>Install</h2>
+  <p class="lead">Arch and Omarchy, from the AUR:</p>
+  <div class="codeblock" style="margin-top:14px"><pre><span class="c"># install</span>
+<span class="c">$</span> yay -S time-portal</pre></div>
+  <p class="lead" style="margin:22px 0 12px">Everything ships in one package: the app, its
+    privileged helper (driven by polkit), the btrbk config, and the systemd units.</p>
+
+  <div class="twocol">
+    <div>
+      <h3 style="margin:0 0 8px">Requirements</h3>
+      <div class="codeblock"><pre>gtk4  libadwaita  btrbk
+cryptsetup  btrfs-progs
+rsync  polkit
+
+<span class="c"># source fs must be btrfs</span>
+<span class="c"># a polkit agent for the passphrase prompt</span></pre></div>
+    </div>
+    <div>
+      <h3 style="margin:0 0 8px">From source</h3>
+      <div class="codeblock"><pre><span class="c">$</span> git clone https://github.com/CurePortal/time-portal
+<span class="c">$</span> cd time-portal
+<span class="c">$</span> cargo build --release
+<span class="c">$</span> sudo ./dev-install.sh</pre></div>
+    </div>
+  </div>
+
+  <h3 style="margin:28px 0 8px">Setting up a backup drive</h3>
+  <p class="lead">In the app, <strong>Set up a new backup drive</strong> lists a spare
+    disk, asks for a passphrase, and does the rest — encrypt, format, mount, schedule.
+    Keep the passphrase somewhere other than this laptop: the keyfile unlocks the drive
+    automatically here, but the passphrase is what opens it on a new machine.</p>
+</div></section>
+
+<footer><div class="wrap">
+  <span>Time Portal · MIT · <a href="https://github.com/CurePortal/time-portal">github.com/CurePortal/time-portal</a></span>
+  <span class="pill">btrfs · LUKS · btrbk</span>
+</div></footer>
+
+<script>
+  const b = document.getElementById('copy');
+  if (b) b.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText('yay -S time-portal');
+      b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy', 1400);
+    } catch (e) { b.textContent = 'yay -S time-portal'; }
+  });
+</script>
+</body>
+</html>

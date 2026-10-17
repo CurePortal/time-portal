@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!--
+    The same glyph the bar widget shows, so a notification is recognisably the
+    same thing rather than a lookalike. Taken from the font outline rather than
+    redrawn by hand: an approximation reads as a different icon at 48px.
+
+    Glyph: fa-history (U+F1DA) from Font Awesome Free, CC BY 4.0
+    (https://fontawesome.com), as bundled in JetBrainsMono Nerd Font.
+
+    It carries its own disc, because a single stroke colour cannot stay legible
+    on both a dark and a light notification background.
+  -->
+  <circle cx="32" cy="32" r="32" fill="#2e3440"/>
+  <g transform="translate(13.460 46.462) scale(0.040173 -0.040173)">
+    <path fill="#eceff4" d="M135 686Q198 750 283.0 786.0Q368 822 462 822Q653 822 788.0 687.0Q923 552 923 360Q923 170 788.0 34.0Q653 -102 462 -102Q318 -102 198 -18Q178 -4 174.0 19.0Q170 42 183.0 62.0Q196 82 220.0 86.0Q244 90 264 76Q353 14 462 14Q604 14 706.0 116.0Q808 218 808.0 360.0Q808 502 706.0 604.0Q604 706 462 706Q318 706 217 606L272 550Q292 530 282.0 503.0Q272 476 242 476H43Q24 476 12.0 488.0Q0 500 0 518V718Q0 746 27.0 757.0Q54 768 74 748ZM462 590H461Q479 590 492.0 578.0Q505 566 505 548V378L622 260Q635 248 635.0 230.0Q635 212 622 200Q610 186 592.0 186.0Q574 186 561 200L431 330Q418 342 418 360V548Q418 566 431.0 578.0Q444 590 462 590Z"/>
+  </g>
+</svg>
