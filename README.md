@@ -9,11 +9,8 @@ device nodes — all of it. Restoring a file is a copy; restoring the machine is
 subvolume swap. That is the whole point, and it is the one thing file-level
 tools (restic, borg, duplicity) deliberately do not give you.
 
-> **Status: early / pre-release.** Backups are believed solid, but **restoring
-> onto a different machine has not been tested yet** and whole-system restore is
-> the least-travelled path. Keep a second copy of anything irreplaceable and
-> verify your restore before relying on this. The interface and on-disk layout
-> may still change.
+> **Alpha: Still in testing phases.** Use caution, and keep a second copy of
+> anything irreplaceable.
 
 ## Why it is Time Machine, on Linux
 
@@ -139,10 +136,6 @@ keeps it there (toggle *Keep running in the tray* under **Settings** or in the
 tray menu).
 
 ## Restoring on a new machine
-
-> **Not yet tested.** As of this release, restore onto a *different* machine —
-> especially **Restore System** — has not been exercised end-to-end. Verify it
-> (ideally from a live USB onto a throwaway disk) before you depend on it.
 
 1. `yay -S time-portal`
 2. Plug in the backup drive. Launch **Time Portal**.
