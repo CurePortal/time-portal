@@ -688,13 +688,11 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
     let init_running = init["running"].as_bool().unwrap_or(false);
     let init_timer = init["timer_enabled"].as_bool().unwrap_or(false);
 
-    // --- settings (modal) ---------------------------------------------------
+    // --- settings (modal dialog) -------------------------------------------
     // Schedule and application/tray options live here, not on the main page.
-    let settings = adw::PreferencesWindow::builder()
-        .transient_for(&window)
-        .modal(true)
-        .title("Settings")
-        .build();
+    // A PreferencesDialog (not a bare window) so it has a real close button and
+    // Escape handling.
+    let settings = adw::PreferencesDialog::builder().title("Settings").build();
     let settings_page = adw::PreferencesPage::new();
 
     let sched_group = adw::PreferencesGroup::new();
@@ -758,7 +756,8 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
     settings_btn.set_tooltip_text(Some("Settings"));
     {
         let settings = settings.clone();
-        settings_btn.connect_clicked(move |_| settings.present());
+        let window = window.clone();
+        settings_btn.connect_clicked(move |_| settings.present(Some(&window)));
     }
     header.pack_end(&settings_btn);
 
