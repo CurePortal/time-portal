@@ -159,6 +159,59 @@ You do not strictly need this app to read a backup: the drive is plain
 LUKS + btrfs, so `cryptsetup open`, mount, and browse the `@home.<timestamp>`
 subvolume directly on any Linux box.
 
+## For the Omarchy team: a live/install-ISO restore medium
+
+Time Portal's system restore is designed to run **from a live environment**, and
+the privileged helper runs **directly as root from a live USB** (the polkit
+action is only needed for the unprivileged desktop session). That makes the
+Omarchy live/install ISO an ideal restore medium: boot it, plug in the Time
+Portal drive, unlock it with the recovery passphrase, and restore your home or
+the whole system.
+
+**Proposal:** include `time-portal` in the ISO package list, so a live Omarchy
+session can restore an *identical* system from a backup.
+
+What it takes:
+
+- **Package:** `time-portal` (from the AUR, or vendored into the ISO build).
+- **Dependencies:** already present or trivial — the desktop brings `gtk4` and
+  `libadwaita`; add `cryptsetup`, `btrfs-progs`, `rsync`, `btrbk`.
+- **Launcher integration is already shipped:** the
+  `org.timeportal.TimePortal.desktop` entry and AppStream metainfo mean it shows
+  up in the live app menu with no extra work.
+- **Optional:** a boot-menu entry or an `omarchy-restore` wrapper that opens the
+  app straight into the restore wizard.
+- **Licence:** MIT — free to bundle.
+
+What works today:
+
+- **Restore My Files** — copies a user's home back from a version; it cannot
+  affect the boot path.
+- **Restore System** — writes a whole-machine version over a *mounted* target
+  root (run it from the live session, not the running system). For an **identical
+  system** — same disk layout and UUIDs, or re-imaging the same machine — this
+  restores in place and boots.
+
+The one gap, for *different* hardware: the snapshot carries the source machine's
+`/etc/fstab`, `/etc/crypttab` and bootloader config, whose UUIDs won't match a
+different disk. Restoring an identical system works today; restoring onto new
+hardware additionally needs those UUIDs rewritten, `mkinitcpio -P` run, and
+Limine reinstalled on the target ESP. That boot-repair automation is not yet
+included — it is the untested part flagged above.
+
+By hand from a live root session (the app wraps exactly this):
+
+```bash
+cryptsetup open /dev/sdX backup                 # the Time Portal drive
+mkdir -p /mnt/back && mount /dev/mapper/backup /mnt/back
+# mount the target root's btrfs top-level, then restore a version over it:
+rsync -aAXH --delete /mnt/back/portal/@.<timestamp>/ /mnt/target/
+# for home only:
+rsync -aAXH /mnt/back/portal/@home.<timestamp>/<user>/ /mnt/target/home/<user>/
+# identical-system restores are done here; new-hardware additionally needs the
+# fstab/crypttab UUIDs rewritten, `mkinitcpio -P`, and Limine reinstalled.
+```
+
 ## Setting up backups
 
 The package installs the btrbk config and units. In the app, **Set up a new
