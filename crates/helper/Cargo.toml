@@ -1,0 +1,15 @@
+[package]
+name = "timeportal-helper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "time-portal-helper"
+path = "src/main.rs"
+
+[dependencies]
+timeportal-core = { path = "../core" }
+serde_json.workspace = true
+anyhow.workspace = true
+clap.workspace = true

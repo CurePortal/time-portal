@@ -1,0 +1,62 @@
+# Maintainer: cure <cure@localhost>
+pkgname=time-portal
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="In-place, browsable btrfs snapshot backups and restore (Time Machine for Arch)"
+arch=('x86_64')
+url="https://github.com/cure/time-portal"
+license=('MIT')
+depends=('gtk4' 'libadwaita' 'btrbk' 'cryptsetup' 'btrfs-progs' 'rsync' 'polkit')
+makedepends=('cargo' 'pkgconf')
+optdepends=(
+  'hyprpolkitagent: graphical authentication prompt for the app'
+  'snapper: local rollback snapshots'
+)
+options=('!lto')
+
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+# Replace SKIP with the real sum once the GitHub tag exists:
+#   updpkgsums
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  cargo fetch --locked
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  cargo build --release --locked --offline
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+
+  # the app + its privileged backend
+  install -Dm755 target/release/time-portal "$pkgdir/usr/bin/time-portal"
+  install -Dm755 target/release/time-portal-helper \
+    "$pkgdir/usr/lib/time-portal/time-portal-helper"
+
+  # desktop integration + polkit action
+  install -Dm644 data/time-portal.desktop \
+    "$pkgdir/usr/share/applications/time-portal.desktop"
+  install -Dm644 data/time-portal.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/time-portal.svg"
+  for size in 48 64 128 256; do
+    install -Dm644 "data/icons/time-portal-$size.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/time-portal.png"
+  done
+  install -Dm644 data/org.timeportal.policy \
+    "$pkgdir/usr/share/polkit-1/actions/org.timeportal.policy"
+
+  # the backup half: btrbk config + systemd units
+  install -Dm644 data/btrbk.conf "$pkgdir/etc/btrbk/btrbk.conf"
+  install -Dm644 data/systemd/btrbk.service.d/override.conf \
+    "$pkgdir/etc/systemd/system/btrbk.service.d/override.conf"
+  install -Dm644 data/systemd/btrbk.timer.d/override.conf \
+    "$pkgdir/etc/systemd/system/btrbk.timer.d/override.conf"
+  install -Dm644 data/systemd/time-portal-mount.service \
+    "$pkgdir/usr/lib/systemd/system/time-portal-mount.service"
+
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

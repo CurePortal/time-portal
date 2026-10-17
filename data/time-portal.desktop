@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Time Portal
+GenericName=Backup and Restore
+Comment=Back up and restore your machine with btrfs snapshots
+Exec=time-portal
+Icon=time-portal
+Terminal=false
+Categories=System;Utility;Archiving;
+Keywords=backup;restore;snapshot;btrfs;time;portal;
+StartupNotify=true

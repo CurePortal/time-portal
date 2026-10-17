@@ -1,0 +1,7 @@
+[Unit]
+Description=Unlock and mount the Time Portal backup drive
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/time-portal/time-portal-helper mount-drive
