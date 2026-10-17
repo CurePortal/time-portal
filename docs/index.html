@@ -119,14 +119,14 @@
   <p class="warn">🧪 Alpha — still in testing phases. Be careful.</p>
 
   <div class="install">
-    <pre><span class="pfx">$ </span>yay -S time-portal</pre>
+    <pre><span class="pfx">$ </span>sudo pacman -U time-portal-0.1.0-1-x86_64.pkg.tar.zst</pre>
     <button id="copy" title="Copy">Copy</button>
   </div>
 
   <div class="cta">
-    <a class="btn primary" href="#install">Install</a>
+    <a class="btn primary" href="https://github.com/CurePortal/time-portal/releases/latest">Download</a>
     <a class="btn" href="https://github.com/CurePortal/time-portal">View source</a>
-    <a class="btn" href="https://aur.archlinux.org/packages/time-portal">AUR</a>
+    <a class="btn" href="#install">Install</a>
   </div>
 </div>
 
@@ -201,9 +201,11 @@
 
 <section id="install"><div class="wrap">
   <h2>Install</h2>
-  <p class="lead">Arch and Omarchy, from the AUR:</p>
-  <div class="codeblock" style="margin-top:14px"><pre><span class="c"># install</span>
-<span class="c">$</span> yay -S time-portal</pre></div>
+  <p class="lead">Arch and Omarchy — download the package from the
+    <a href="https://github.com/CurePortal/time-portal/releases/latest">latest release</a>
+    and install it with pacman:</p>
+  <div class="codeblock" style="margin-top:14px"><pre><span class="c"># after downloading time-portal-&lt;version&gt;-x86_64.pkg.tar.zst</span>
+<span class="c">$</span> sudo pacman -U time-portal-0.1.0-1-x86_64.pkg.tar.zst</pre></div>
   <p class="lead" style="margin:22px 0 12px">Everything ships in one package: the app, its
     privileged helper (driven by polkit), the btrbk config, and the systemd units.</p>
 
@@ -241,9 +243,9 @@ rsync  polkit
 <script>
   const b = document.getElementById('copy');
   if (b) b.addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText('yay -S time-portal');
+    try { await navigator.clipboard.writeText('sudo pacman -U time-portal-0.1.0-1-x86_64.pkg.tar.zst');
       b.textContent = 'Copied'; setTimeout(() => b.textContent = 'Copy', 1400);
-    } catch (e) { b.textContent = 'yay -S time-portal'; }
+    } catch (e) { b.textContent = 'Copy'; }
   });
 </script>
 </body>

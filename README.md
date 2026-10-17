@@ -125,9 +125,18 @@ filesystem must be **btrfs**.
 
 ## Install
 
+Arch / Omarchy — download the package from the
+[latest release](https://github.com/CurePortal/time-portal/releases/latest)
+and install it with pacman:
+
+```bash
+# after downloading time-portal-<version>-x86_64.pkg.tar.zst
+sudo pacman -U time-portal-0.1.0-1-x86_64.pkg.tar.zst
 ```
-yay -S time-portal
-```
+
+Dependencies (`gtk4`, `libadwaita`, `btrbk`, `cryptsetup`, `btrfs-progs`,
+`rsync`, `polkit`) come from the official repos. To build from source instead,
+see [Building from source](#building-from-source).
 
 Everything ships in one package: the **app** and its **privileged helper**
 (driven by polkit), plus the **btrbk systemd units** for the scheduled backups.
@@ -137,7 +146,7 @@ tray menu).
 
 ## Restoring on a new machine
 
-1. `yay -S time-portal`
+1. Install Time Portal (see above).
 2. Plug in the backup drive. Launch **Time Portal**.
 3. Pick the drive, type the **recovery passphrase** (the one you stored
    off-machine), choose a version.
@@ -166,7 +175,7 @@ session can restore an *identical* system from a backup.
 
 What it takes:
 
-- **Package:** `time-portal` (from the AUR, or vendored into the ISO build).
+- **Package:** `time-portal` (the release package, or vendored into the ISO build).
 - **Dependencies:** already present or trivial — the desktop brings `gtk4` and
   `libadwaita`; add `cryptsetup`, `btrfs-progs`, `rsync`, `btrbk`.
 - **Launcher integration is already shipped:** the
