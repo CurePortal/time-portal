@@ -23,3 +23,9 @@ First release.
 - AppStream metadata and a reverse-DNS desktop entry for software centres.
 - `dev-install.sh` for installing a local build; `packaging/PKGBUILD` for the
   AUR package.
+
+### Known limitations
+- **Restore onto a different machine has not been tested** as of this release;
+  whole-system restore (`Restore System`) is the least-travelled path.
+- No network/remote targets (local encrypted drive only).
+- Pause/resume holds only for the current boot.

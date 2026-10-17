@@ -42,6 +42,8 @@
   .hero h1{font-size:clamp(2.2rem,6vw,3.6rem);margin:.2em 0 .1em;letter-spacing:-.02em}
   .hero .tag{font-size:clamp(1.05rem,2.6vw,1.35rem);color:var(--fg);margin:0 auto;max-width:720px}
   .hero .sub{color:var(--dim);max-width:680px;margin:14px auto 0}
+  .warn{display:inline-block;margin-top:16px;padding:8px 16px;border-radius:10px;
+    border:1px solid #5a3a12;background:rgba(255,180,84,.08);color:var(--amber);font-size:.88rem}
   .cta{margin-top:26px;display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
   .btn{display:inline-flex;align-items:center;gap:8px;padding:10px 18px;border-radius:10px;
     border:1px solid var(--line);background:var(--panel);color:var(--fg);font-weight:600;font-size:.95rem}
@@ -114,6 +116,7 @@
   <p class="sub">Every backup is a real, browsable btrfs snapshot on an encrypted
     drive that looks exactly like your machine at that moment — not an opaque
     archive. Restoring a file is a copy; restoring the machine is a subvolume swap.</p>
+  <p class="warn">⚠️ Pre-release — restore onto a <strong>new machine</strong> is not tested yet. Verify your restore before trusting it.</p>
 
   <div class="install">
     <pre><span class="pfx">$ </span>yay -S time-portal</pre>
