@@ -2,9 +2,9 @@
 pkgname=time-portal
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="In-place, browsable btrfs snapshot backups and restore (Time Machine for Arch)"
+pkgdesc="Time Machine-style btrfs snapshot backups and in-place restore (alpha)"
 arch=('x86_64')
-url="https://github.com/cure/time-portal"
+url="https://github.com/CurePortal/time-portal"
 license=('MIT')
 depends=('gtk4' 'libadwaita' 'btrbk' 'cryptsetup' 'btrfs-progs' 'rsync' 'polkit')
 makedepends=('cargo' 'pkgconf')
@@ -12,12 +12,12 @@ optdepends=(
   'hyprpolkitagent: graphical authentication prompt for the app'
   'snapper: local rollback snapshots'
 )
+backup=('etc/btrbk/btrbk.conf')
+install=time-portal.install
 options=('!lto')
 
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-# Replace SKIP with the real sum once the GitHub tag exists:
-#   updpkgsums
-sha256sums=('SKIP')
+sha256sums=('e185dc974c50a68658ab563d8846727589bd14693d0b718b68e1108f5bd3b8df')
 
 prepare() {
   cd "$pkgname-$pkgver"

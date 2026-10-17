@@ -1,0 +1,35 @@
+post_install() {
+  systemctl daemon-reload 2>/dev/null || true
+  udevadm control --reload-rules 2>/dev/null || true
+
+  cat <<'EOF'
+
+Time Portal (alpha) installed.
+
+  * Launch "Time Portal" from your application menu.
+  * Use "Set up a new backup drive" to encrypt a spare disk and schedule
+    backups.
+  * Keep your recovery passphrase somewhere other than this machine.
+
+Alpha: still in testing phases -- be careful.
+
+EOF
+}
+
+post_upgrade() {
+  post_install
+}
+
+pre_remove() {
+  cat <<'EOF'
+
+Removing Time Portal. Backups already on your drive are untouched, and the LUKS
+keyfile /etc/luks/backup.key is left in place (remove it yourself if you want).
+
+EOF
+}
+
+post_remove() {
+  systemctl daemon-reload 2>/dev/null || true
+  udevadm control --reload-rules 2>/dev/null || true
+}

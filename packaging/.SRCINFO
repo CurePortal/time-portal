@@ -1,0 +1,25 @@
+pkgbase = time-portal
+	pkgdesc = Time Machine-style btrfs snapshot backups and in-place restore (alpha)
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/CurePortal/time-portal
+	install = time-portal.install
+	arch = x86_64
+	license = MIT
+	makedepends = cargo
+	makedepends = pkgconf
+	depends = gtk4
+	depends = libadwaita
+	depends = btrbk
+	depends = cryptsetup
+	depends = btrfs-progs
+	depends = rsync
+	depends = polkit
+	optdepends = hyprpolkitagent: graphical authentication prompt for the app
+	optdepends = snapper: local rollback snapshots
+	options = !lto
+	backup = etc/btrbk/btrbk.conf
+	source = time-portal-0.1.0.tar.gz::https://github.com/CurePortal/time-portal/archive/refs/tags/v0.1.0.tar.gz
+	sha256sums = e185dc974c50a68658ab563d8846727589bd14693d0b718b68e1108f5bd3b8df
+
+pkgname = time-portal
