@@ -80,6 +80,15 @@ enum Cmd {
     MountDrive,
     /// Index the drive: delete incomplete backups so diffs can proceed.
     Clean,
+    /// Restore the whole system tree; refuses over the running root.
+    RestoreSystem { source: String, dest: String },
+    /// Print a paste-ready report for restore testing.
+    Report {
+        #[arg(long)]
+        restore: Option<String>,
+        #[arg(long, default_value = "/mnt/backup/portal")]
+        target: String,
+    },
     /// Install the hotplug udev rule + mount service for the attached drive.
     InstallHooks,
     /// Stop the backup unit (non-blocking).
@@ -155,6 +164,8 @@ fn main() -> Result<()> {
             Ok(())
         }
         Cmd::Clean => run("btrbk", &["clean"]),
+        Cmd::RestoreSystem { source, dest } => restore_system(&source, &dest),
+        Cmd::Report { restore, target } => report(restore, target),
         Cmd::InstallHooks => install_hooks(),
         Cmd::StopBackup => stop_backup(),
         Cmd::PauseBackup => pause_backup(),
@@ -380,6 +391,7 @@ fn status(target: &str) -> Result<()> {
         String::new()
     };
     let secs = if running { run_seconds() } else { None };
+    let paused = running && pause_marker();
     let percent = prog.as_ref().and_then(|p| p["percent"].as_f64());
     let done_bytes = prog.as_ref().and_then(|p| p["done_bytes"].as_u64());
     let total_bytes = prog.as_ref().and_then(|p| p["total_bytes"].as_u64());
@@ -544,6 +556,98 @@ fn install_hooks() -> Result<()> {
 fn mount(source: &str, target: &str) -> Result<()> {
     std::fs::create_dir_all(target).with_context(|| format!("creating {target}"))?;
     run("mount", &[source, target])
+}
+
+/// Restore the system tree, refusing if the destination is the running root.
+/// A mis-click on the live system must lose nothing.
+fn restore_system(source: &str, dest: &str) -> Result<()> {
+    let clean = |s: String| s.split('[').next().unwrap_or("").to_string();
+    let root_src = findmnt_field("/", "SOURCE").map(clean);
+    let dest_src = findmnt_field(dest, "SOURCE").map(clean);
+    if root_src.is_some() && root_src == dest_src {
+        bail!(
+            "refusing to restore over the running system: {dest} is on the same \
+             filesystem as /. Boot live media and restore into a mounted target."
+        );
+    }
+    run_str(
+        "rsync",
+        &[
+            "-aAXH".into(),
+            "--info=progress2".into(),
+            "--delete".into(),
+            format!("{}/", source.trim_end_matches('/')),
+            format!("{}/", dest.trim_end_matches('/')),
+        ],
+    )
+}
+
+fn cmd_output(program: &str, args: &[&str]) -> String {
+    Command::new(program)
+        .args(args)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim_end().to_string())
+        .unwrap_or_default()
+}
+
+fn report(restore: Option<String>, target: String) -> Result<()> {
+    let os = std::fs::read_to_string("/etc/os-release")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find(|l| l.starts_with("PRETTY_NAME="))
+                .map(|l| {
+                    l.trim_start_matches("PRETTY_NAME=")
+                        .trim_matches('"')
+                        .to_string()
+                })
+        })
+        .unwrap_or_else(|| "unknown".to_string());
+    let clean = |s: String| s.split('[').next().unwrap_or("").to_string();
+
+    println!("===== Time Portal restore report =====");
+    println!("date:            {}", cmd_output("date", &[]));
+    println!("os:              {os}");
+    println!("kernel:          {}", cmd_output("uname", &["-r"]));
+    println!(
+        "restore tried:   {}",
+        restore.as_deref().unwrap_or("(describe what you ran)")
+    );
+    println!(
+        "root (/):        {}",
+        findmnt_field("/", "SOURCE").map(clean).unwrap_or_default()
+    );
+    println!("target:          {target}");
+    println!(
+        "target mounted:  {}",
+        mounted(&target)
+            || Path::new(&target)
+                .parent()
+                .map(|p| mounted(&p.to_string_lossy()))
+                .unwrap_or(false)
+    );
+    println!();
+    println!("-- drive sizes --");
+    println!("{}", cmd_output("df", &["-h", "/mnt/backup", "/"]));
+    println!();
+    println!("-- target subvolumes --");
+    println!(
+        "{}",
+        cmd_output("btrfs", &["subvolume", "list", "-p", "/mnt/backup"])
+    );
+    println!();
+    println!("-- source subvolumes --");
+    println!(
+        "{}",
+        cmd_output("btrfs", &["subvolume", "list", "-p", "/mnt/btrfs"])
+    );
+    println!();
+    println!("-- journalctl -u btrbk.service (last 50) --");
+    println!(
+        "{}",
+        cmd_output("journalctl", &["-u", "btrbk.service", "-n", "50", "--no-pager"])
+    );
+    Ok(())
 }
 
 fn restore(source: &str, dest: &str, delete: bool) -> Result<()> {

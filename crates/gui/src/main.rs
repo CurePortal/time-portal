@@ -991,6 +991,40 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
     sys_btn.set_halign(gtk::Align::Start);
     restore_page.append(&sys_btn);
 
+    let report_group = adw::PreferencesGroup::new();
+    report_group.set_title("Testing");
+    report_group
+        .set_description(Some("If a restore misbehaves, copy this into your report."));
+    restore_page.append(&report_group);
+    let report_btn = gtk::Button::with_label("Copy Test Report");
+    report_btn.set_halign(gtk::Align::Start);
+    {
+        let helper = helper.clone();
+        let overlay = overlay.clone();
+        let window = window.clone();
+        let state = state.clone();
+        report_btn.connect_clicked(move |_| {
+            let (ts, _target) = selected(&state);
+            let what = if ts.is_empty() {
+                "restore report (no version selected)".to_string()
+            } else {
+                format!("restore of version {ts}")
+            };
+            match exec(
+                &helper,
+                &["report".to_string(), "--restore".to_string(), what],
+                true,
+            ) {
+                Ok(text) => {
+                    window.clipboard().set_text(&text);
+                    toast(&overlay, "Report copied to clipboard");
+                }
+                Err(e) => toast(&overlay, &format!("Could not build report: {e}")),
+            }
+        });
+    }
+    restore_page.append(&report_btn);
+
     let prog_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     let restore_spinner = gtk::Spinner::new();
     restore_spinner.set_visible(false);
@@ -1183,7 +1217,7 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
             let dialog = adw::MessageDialog::builder()
                 .transient_for(&window)
                 .heading("Restore the whole system?")
-                .body("This writes the snapshot over the target root, including system files. Only do this from a live environment.")
+                .body("This writes the snapshot over the target root, including system files. It is refused unless you are running from live media, so a mis-click cannot damage the running system.")
                 .build();
             dialog.add_response("cancel", "Cancel");
             dialog.add_response("ok", "Restore");
@@ -1203,7 +1237,7 @@ fn build_ui(app: &adw::Application) -> adw::ApplicationWindow {
                 let work = move || {
                     exec(
                         &helper,
-                        &["restore".to_string(), source, dest, "--delete".to_string()],
+                        &["restore-system".to_string(), source, dest],
                         true,
                     )
                     .map(|_| "System restore complete".to_string())
