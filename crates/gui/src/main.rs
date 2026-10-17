@@ -359,8 +359,10 @@ fn human_bytes(n: u64) -> String {
 // embedded as ARGB32 (network byte order) so it renders whatever the host is.
 fn rgba_to_argb(rgba: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(rgba.len());
-    for px in rgba.chunks_exact(4) {
-        out.extend_from_slice(&[px[3], px[0], px[1], px[2]]);
+    for px in rgba.chunks(4) {
+        if let [r, g, b, a] = px {
+            out.extend_from_slice(&[*a, *r, *g, *b]);
+        }
     }
     out
 }
